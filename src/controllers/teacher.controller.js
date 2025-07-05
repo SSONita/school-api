@@ -25,13 +25,26 @@ import db from '../models/index.js';
  *                 type: string
  *               department:
  *                 type: string
+ *               CourseIds:
+ *                 type: array
+ *                 items:
+ *                   type: integer
+ *                 description: IDs of courses to assign
  *     responses:
  *       201:
  *         description: Teacher created
  */
 export const createTeacher = async (req, res) => {
     try {
+        const { CourseIds, ...teacherData } = req.body;
         const teacher = await db.Teacher.create(req.body);
+        if (Array.isArray(CourseIds) && CourseIds.length > 0) {
+            const courses = await db.Course.findAll({
+                where: { id: CourseIds },
+            });
+
+            await teacher.addCourses(courses); 
+        }
         res.status(201).json(teacher);
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -44,14 +57,66 @@ export const createTeacher = async (req, res) => {
  *   get:
  *     summary: Get all teachers
  *     tags: [Teachers]
+ *     parameters:
+ *       - in: query
+ *         name: page
+ *         schema: { type: integer, default: 1 }
+ *         description: Page number
+ *       - in: query
+ *         name: limit
+ *         schema: { type: integer, default: 10 }
+ *         description: Number of items per page
+ *       - in: query
+ *         name: sort
+ *         schema:
+ *         type: string
+ *         enum: [asc, desc]
+ *         default: desc
+ *         description: Sort by created time (ascending or descending)
+ *       - in: query
+ *         name: populate
+ *         schema:
+ *           type: string
+ *           enum: [courseId, courses]
+ *         description: Include related models (e.g., populate=courseId includes enrolled courses)
  *     responses:
  *       200:
  *         description: List of teachers
  */
 export const getAllTeachers = async (req, res) => {
+    const sortBy = req.query.sort === 'desc' ? 'desc' : 'asc';
+    // take certain amount at a time
+    const limit = parseInt(req.query.limit) || 10;
+    // which page to take
+    const page = parseInt(req.query.page) || 1;
+
+    const total = await db.Course.count();
+
+    const populate = req.query.populate;
+    const include = [];
+
+    if (populate) {
+        const fields = populate.split(',');
+        if (fields.includes('courseId') || fields.includes('courses')) {
+            include.push(db.Course);
+        }
+    }
+
     try {
-        const teachers = await db.Teacher.findAll({ include: db.Course });
-        res.json(teachers);
+        const teachers = await db.Teacher.findAll({ 
+            // include: db.Course
+            limit: limit, offset: (page - 1) * limit ,
+            order: [['id', sortBy]],
+            include, 
+        });
+        res.json({
+            meta: {
+                totalItems: total,
+                page: page,
+                totalPages: Math.ceil(total / limit),
+            },
+            data: teachers,
+        });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
@@ -101,11 +166,17 @@ export const getTeacherById = async (req, res) => {
  *         application/json:
  *           schema:
  *             type: object
+ *             required: [name, department, coursIds]
  *             properties:
  *               name:
  *                 type: string
  *               department:
  *                 type: string
+ *               courseIds:
+ *                 type: array
+ *                 items:
+ *                   type: integer
+ *                 description: IDs of courses to assign
  *     responses:
  *       200:
  *         description: Updated
